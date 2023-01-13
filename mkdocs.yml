@@ -68,12 +68,14 @@ nav:
                   - Overview: "user-guide/user-defined-functions/reduce/windowing/windowing.md"
                   - Fixed: "user-guide/user-defined-functions/reduce/windowing/fixed.md"
                   - Sliding: "user-guide/user-defined-functions/reduce/windowing/sliding.md"
+              - Examples: "user-guide/user-defined-functions/reduce/examples.md"
       - user-guide/pipeline-tuning.md
       - user-guide/conditional-forwarding.md
       - user-guide/autoscaling.md
       - user-guide/container-resources.md
       - user-guide/volumes.md
       - user-guide/environment-variables.md
+      - user-guide/labels-and-annotations.md
       - user-guide/init-containers.md
       - user-guide/sidecar-containers.md
       - user-guide/pipeline-customization.md
