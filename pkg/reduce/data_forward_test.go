@@ -127,7 +127,7 @@ func (f CounterReduceTest) ApplyReduce(_ context.Context, partitionID *partition
 				EventTime: partitionID.End,
 			},
 			ID:  "msgID",
-			Key: "result",
+			Key: []string{"result"},
 		},
 		Body: isb.Body{Payload: b},
 	}
@@ -136,7 +136,7 @@ func (f CounterReduceTest) ApplyReduce(_ context.Context, partitionID *partition
 	}, nil
 }
 
-func (f CounterReduceTest) WhereTo(_ string) ([]string, error) {
+func (f CounterReduceTest) WhereTo(_ []string) ([]string, error) {
 	return []string{"reduce-to-buffer"}, nil
 }
 
@@ -150,7 +150,7 @@ func (s SumReduceTest) ApplyReduce(_ context.Context, partitionID *partition.ID,
 		var payload PayloadForTest
 		_ = json.Unmarshal(msg.Payload, &payload)
 		key := msg.Key
-		sums[key] += payload.Value
+		sums[key[0]] += payload.Value
 	}
 
 	msgs := make([]*isb.Message, 0)
@@ -164,7 +164,7 @@ func (s SumReduceTest) ApplyReduce(_ context.Context, partitionID *partition.ID,
 					EventTime: partitionID.End,
 				},
 				ID:  "msgID",
-				Key: k,
+				Key: []string{k},
 			},
 			Body: isb.Body{Payload: b},
 		}
@@ -183,12 +183,12 @@ func (m MaxReduceTest) ApplyReduce(_ context.Context, partitionID *partition.ID,
 	for msg := range messageStream {
 		var payload PayloadForTest
 		_ = json.Unmarshal(msg.Payload, &payload)
-		if max, ok := maxMap[msg.Key]; ok {
+		if max, ok := maxMap[msg.Key[0]]; ok {
 			mx = max
 		}
 		if payload.Value > mx {
 			mx = payload.Value
-			maxMap[msg.Key] = mx
+			maxMap[msg.Key[0]] = mx
 		}
 	}
 
@@ -202,7 +202,7 @@ func (m MaxReduceTest) ApplyReduce(_ context.Context, partitionID *partition.ID,
 					EventTime: partitionID.End,
 				},
 				ID:  "msgID",
-				Key: k,
+				Key: []string{k},
 			},
 			Body: isb.Body{Payload: b},
 		}
@@ -453,7 +453,6 @@ func TestReduceDataForward_IdleWM(t *testing.T) {
 			MessageInfo: isb.MessageInfo{},
 			Kind:        0,
 			ID:          "",
-			Key:         "",
 		}, msgs[i].Header)
 	}
 
@@ -468,7 +467,7 @@ func TestReduceDataForward_IdleWM(t *testing.T) {
 	assert.Equal(t, isb.WMB, msgs[0].Kind)
 	// the second message should be the data message from the closed window above
 	// in the test ApplyUDF above we've set the final message to have key="result"
-	for msgs[1].Key != "result" {
+	for len(msgs[1].Key) == 0 {
 		select {
 		case <-ctx.Done():
 			if ctx.Err() == context.DeadlineExceeded {
@@ -497,7 +496,6 @@ func TestReduceDataForward_IdleWM(t *testing.T) {
 			MessageInfo: isb.MessageInfo{},
 			Kind:        0,
 			ID:          "",
-			Key:         "",
 		}, msgs[i].Header)
 	}
 
@@ -1105,7 +1103,7 @@ func buildMessagesForReduce(count int, key string, publishTime time.Time) []isb.
 					EventTime: publishTime,
 				},
 				ID:  fmt.Sprintf("%d", i),
-				Key: key,
+				Key: []string{key},
 			},
 			Body: isb.Body{Payload: result},
 		}
@@ -1176,15 +1174,15 @@ func publishMessages(ctx context.Context, startTime int, messages []int, testDur
 }
 
 func buildIsbMessage(messageValue int, eventTime time.Time) isb.Message {
-	var messageKey string
+	var messageKey []string
 	if messageValue%2 == 0 {
-		messageKey = "even"
+		messageKey = []string{"even"}
 	} else {
-		messageKey = "odd"
+		messageKey = []string{"odd"}
 	}
 
 	result, _ := json.Marshal(PayloadForTest{
-		Key:   messageKey,
+		Key:   messageKey[0],
 		Value: messageValue,
 	})
 	return isb.Message{

@@ -82,7 +82,7 @@ func (t *testForwardFetcher) GetHeadWMB() wmb.WMB {
 type myForwardTest struct {
 }
 
-func (f myForwardTest) WhereTo(_ string) ([]string, error) {
+func (f myForwardTest) WhereTo(_ []string) ([]string, error) {
 	return []string{"to1"}, nil
 }
 
@@ -509,7 +509,7 @@ func TestNewInterStepDataForwardIdleWatermark_Reset(t *testing.T) {
 type mySourceForwardTest struct {
 }
 
-func (f mySourceForwardTest) WhereTo(_ string) ([]string, error) {
+func (f mySourceForwardTest) WhereTo(_ []string) ([]string, error) {
 	return []string{"to1"}, nil
 }
 
@@ -769,7 +769,7 @@ func TestNewInterStepDataForwardToOneStep(t *testing.T) {
 type myForwardDropTest struct {
 }
 
-func (f myForwardDropTest) WhereTo(_ string) ([]string, error) {
+func (f myForwardDropTest) WhereTo(_ []string) ([]string, error) {
 	return []string{dfv1.MessageKeyDrop}, nil
 }
 
@@ -877,7 +877,7 @@ func TestNewInterStepDataForward_dropAll(t *testing.T) {
 type myForwardToAllTest struct {
 }
 
-func (f myForwardToAllTest) WhereTo(_ string) ([]string, error) {
+func (f myForwardToAllTest) WhereTo(_ []string) ([]string, error) {
 	return []string{dfv1.MessageKeyAll}, nil
 }
 
@@ -971,7 +971,7 @@ func TestNewInterStepData_forwardToAll(t *testing.T) {
 type myForwardInternalErrTest struct {
 }
 
-func (f myForwardInternalErrTest) WhereTo(_ string) ([]string, error) {
+func (f myForwardInternalErrTest) WhereTo(_ []string) ([]string, error) {
 	return []string{"to1"}, nil
 }
 
@@ -1023,7 +1023,7 @@ func TestNewInterStepDataForward_WithInternalError(t *testing.T) {
 type myForwardApplyWhereToErrTest struct {
 }
 
-func (f myForwardApplyWhereToErrTest) WhereTo(_ string) ([]string, error) {
+func (f myForwardApplyWhereToErrTest) WhereTo(_ []string) ([]string, error) {
 	return []string{"to1"}, fmt.Errorf("whereToStep failed")
 }
 
@@ -1070,7 +1070,7 @@ func TestNewInterStepDataForward_WhereToError(t *testing.T) {
 type myForwardApplyUDFErrTest struct {
 }
 
-func (f myForwardApplyUDFErrTest) WhereTo(_ string) ([]string, error) {
+func (f myForwardApplyUDFErrTest) WhereTo(_ []string) ([]string, error) {
 	return []string{"to1"}, nil
 }
 
