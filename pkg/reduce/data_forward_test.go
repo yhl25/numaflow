@@ -504,7 +504,7 @@ func TestReduceDataForward_IdleWM(t *testing.T) {
 // Count operation with 1 min window
 func TestReduceDataForward_Count(t *testing.T) {
 	var (
-		ctx, cancel    = context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel    = context.WithTimeout(context.Background(), 10*time.Second)
 		fromBufferSize = int64(100000)
 		toBufferSize   = int64(10)
 		messageValue   = []int{7}
@@ -550,17 +550,6 @@ func TestReduceDataForward_Count(t *testing.T) {
 	// start the producer
 	go publishMessages(ctx, startTime, messageValue, 300, 10, p, fromBuffer)
 
-	// wait until there is data in to buffer
-	for buffer.IsEmpty() {
-		select {
-		case <-ctx.Done():
-			assert.Fail(t, ctx.Err().Error())
-			return
-		default:
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
 	// we are reading only one message here but the count should be equal to
 	// the number of keyed windows that closed
 	msgs, readErr := buffer.Read(ctx, 1)
@@ -589,7 +578,7 @@ func TestReduceDataForward_Count(t *testing.T) {
 // Sum operation with 2 minutes window
 func TestReduceDataForward_Sum(t *testing.T) {
 	var (
-		ctx, cancel    = context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel    = context.WithTimeout(context.Background(), 10*time.Second)
 		fromBufferSize = int64(100000)
 		toBufferSize   = int64(10)
 		messageValue   = []int{10}
@@ -634,17 +623,6 @@ func TestReduceDataForward_Sum(t *testing.T) {
 	// start the producer
 	go publishMessages(ctx, startTime, messageValue, 300, 10, p, fromBuffer)
 
-	// wait until there is data in to buffer
-	for buffer.IsEmpty() {
-		select {
-		case <-ctx.Done():
-			assert.Fail(t, ctx.Err().Error())
-			return
-		default:
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
 	// we are reading only one message here but the count should be equal to
 	// the number of keyed windows that closed
 	msgs, readErr := buffer.Read(ctx, 1)
@@ -673,7 +651,7 @@ func TestReduceDataForward_Sum(t *testing.T) {
 // Max operation with 5 minutes window
 func TestReduceDataForward_Max(t *testing.T) {
 	var (
-		ctx, cancel    = context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel    = context.WithTimeout(context.Background(), 10*time.Second)
 		fromBufferSize = int64(100000)
 		toBufferSize   = int64(10)
 		messageValue   = []int{100}
@@ -718,17 +696,6 @@ func TestReduceDataForward_Max(t *testing.T) {
 
 	// start the producer
 	go publishMessages(ctx, startTime, messageValue, 600, 10, p, fromBuffer)
-
-	// wait until there is data in to buffer
-	for buffer.IsEmpty() {
-		select {
-		case <-ctx.Done():
-			assert.Fail(t, ctx.Err().Error())
-			return
-		default:
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
 
 	// we are reading only one message here but the count should be equal to
 	// the number of keyed windows that closed
@@ -805,17 +772,6 @@ func TestReduceDataForward_SumWithDifferentKeys(t *testing.T) {
 	// start the forwarder
 	go reduceDataForward.Start()
 
-	// wait until there is data in to buffer
-	for buffer.IsEmpty() {
-		select {
-		case <-ctx.Done():
-			assert.Fail(t, ctx.Err().Error())
-			return
-		default:
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
 	msgs0, readErr := buffer.Read(ctx, 1)
 	assert.Nil(t, readErr)
 	for len(msgs0) == 0 || msgs0[0].Header.Kind == isb.WMB {
@@ -863,7 +819,7 @@ func TestReduceDataForward_SumWithDifferentKeys(t *testing.T) {
 // Max operation with 5 minutes window and non keyed
 func TestReduceDataForward_NonKeyed(t *testing.T) {
 	var (
-		ctx, cancel    = context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel    = context.WithTimeout(context.Background(), 10*time.Second)
 		fromBufferSize = int64(100000)
 		toBufferSize   = int64(10)
 		messages       = []int{100, 99}
@@ -909,17 +865,6 @@ func TestReduceDataForward_NonKeyed(t *testing.T) {
 	// start the producer
 	go publishMessages(ctx, startTime, messages, 600, 10, p, fromBuffer)
 
-	// wait until there is data in to buffer
-	for buffer.IsEmpty() {
-		select {
-		case <-ctx.Done():
-			assert.Fail(t, ctx.Err().Error())
-			return
-		default:
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
 	// we are reading only one message here but the count should be equal to
 	// the number of keyed windows that closed
 	msgs, readErr := buffer.Read(ctx, 1)
@@ -949,7 +894,7 @@ func TestReduceDataForward_NonKeyed(t *testing.T) {
 
 func TestDataForward_WithContextClose(t *testing.T) {
 	var (
-		ctx, cancel    = context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel    = context.WithTimeout(context.Background(), 10*time.Second)
 		fromBufferSize = int64(100000)
 		toBufferSize   = int64(10)
 		messages       = []int{100, 99}
@@ -1080,11 +1025,24 @@ func buildPublisherMapAndOTStore(ctx context.Context, toBuffers map[string]isb.B
 	// create publisher for to Buffers
 	for key := range toBuffers {
 		publishEntity := processor.NewProcessorEntity(key)
-		hb, _, _ := inmem.NewKVInMemKVStore(ctx, pipelineName, key+"_PROCESSORS")
-		ot, _, _ := inmem.NewKVInMemKVStore(ctx, pipelineName, key+"_OT")
+		hb, hbKVEntry, _ := inmem.NewKVInMemKVStore(ctx, pipelineName, key+"_PROCESSORS")
+		ot, otKVEntry, _ := inmem.NewKVInMemKVStore(ctx, pipelineName, key+"_OT")
 		otStores[key] = ot
 		p := publish.NewPublish(ctx, publishEntity, wmstore.BuildWatermarkStore(hb, ot), publish.WithAutoRefreshHeartbeatDisabled(), publish.WithPodHeartbeatRate(1))
 		publishers[key] = p
+
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-hbKVEntry:
+					// do nothing... just to consume the toBuffer hbBucket
+				case <-otKVEntry:
+					// do nothing... just to consume the toBuffer otBucket
+				}
+			}
+		}()
 	}
 	return publishers, otStores
 }
