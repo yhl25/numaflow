@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::{env, fmt};
 
+use crate::shared::utils::{prost_timestamp_from_utc, utc_from_timestamp};
+use crate::Error;
+use crate::Result;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
@@ -14,10 +17,6 @@ use numaflow_pb::clients::source::{read_response, AckRequest};
 use numaflow_pb::clients::sourcetransformer::SourceTransformRequest;
 use prost::Message as ProtoMessage;
 use serde::{Deserialize, Serialize};
-
-use crate::shared::utils::{prost_timestamp_from_utc, utc_from_timestamp};
-use crate::Error;
-use crate::Result;
 
 const NUMAFLOW_MONO_VERTEX_NAME: &str = "NUMAFLOW_MONO_VERTEX_NAME";
 const NUMAFLOW_VERTEX_NAME: &str = "NUMAFLOW_VERTEX_NAME";
@@ -34,13 +33,13 @@ pub(crate) fn get_vertex_name() -> &'static str {
 
 /// A message that is sent from the source to the sink.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Message {
+pub struct Message<O: Offset> {
     /// keys of the message
     pub(crate) keys: Vec<String>,
     /// actual payload of the message
     pub(crate) value: Vec<u8>,
     /// offset of the message
-    pub(crate) offset: Offset,
+    pub(crate) offset: Option<O>,
     /// event time of the message
     pub(crate) event_time: DateTime<Utc>,
     /// id of the message
@@ -49,18 +48,83 @@ pub(crate) struct Message {
     pub(crate) headers: HashMap<String, String>,
 }
 
-/// Offset of the message which will be used to acknowledge the message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Offset {
-    /// unique identifier of the message
-    pub(crate) offset: String,
-    /// partition id of the message
-    pub(crate) partition_id: i32,
+// Define the Offset trait
+pub trait Offset: fmt::Display {
+    fn sequence(&self) -> Result<u64>;
+    fn ack_it(&self) -> Result<()>;
+    fn no_ack(&self) -> Result<()>;
+    fn partition_idx(&self) -> i32;
 }
 
-impl fmt::Display for Offset {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntOffset {
+    seq: u64,
+    partition_idx: i32,
+}
+
+impl IntOffset {
+    pub fn new(seq: u64, partition_idx: i32) -> Self {
+        Self { seq, partition_idx }
+    }
+}
+
+impl Offset for IntOffset {
+    fn sequence(&self) -> Result<u64> {
+        Ok(self.seq)
+    }
+
+    fn ack_it(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn no_ack(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn partition_idx(&self) -> i32 {
+        self.partition_idx
+    }
+}
+
+impl fmt::Display for IntOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}-{}", self.offset, self.partition_id)
+        write!(f, "{}-{}", self.seq, self.partition_idx)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StringOffset {
+    seq: String,
+    partition_idx: i32,
+}
+
+impl StringOffset {
+    pub fn new(seq: String, partition_idx: i32) -> Self {
+        Self { seq, partition_idx }
+    }
+}
+
+impl Offset for StringOffset {
+    fn sequence(&self) -> Result<u64> {
+        Ok(self.seq.parse().unwrap())
+    }
+
+    fn ack_it(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn no_ack(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn partition_idx(&self) -> i32 {
+        self.partition_idx
+    }
+}
+
+impl fmt::Display for StringOffset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-{}", self.seq, self.partition_idx)
     }
 }
 
@@ -81,21 +145,41 @@ impl MessageID {
     }
 }
 
+impl From<numaflow_pb::objects::isb::MessageId> for MessageID {
+    fn from(id: numaflow_pb::objects::isb::MessageId) -> Self {
+        Self {
+            vertex_name: id.vertex_name,
+            offset: id.offset,
+            index: id.index,
+        }
+    }
+}
+
+impl From<MessageID> for numaflow_pb::objects::isb::MessageId {
+    fn from(id: MessageID) -> Self {
+        Self {
+            vertex_name: id.vertex_name,
+            offset: id.offset,
+            index: id.index,
+        }
+    }
+}
+
 impl fmt::Display for MessageID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}-{}-{}", self.vertex_name, self.offset, self.index)
     }
 }
 
-impl From<Offset> for AckRequest {
-    fn from(offset: Offset) -> Self {
+impl From<StringOffset> for AckRequest {
+    fn from(offset: StringOffset) -> Self {
         Self {
             request: Some(numaflow_pb::clients::source::ack_request::Request {
                 offset: Some(numaflow_pb::clients::source::Offset {
                     offset: BASE64_STANDARD
-                        .decode(offset.offset)
+                        .decode(offset.seq)
                         .expect("we control the encoding, so this should never fail"),
-                    partition_id: offset.partition_id,
+                    partition_id: offset.partition_idx,
                 }),
             }),
             handshake: None,
@@ -103,10 +187,26 @@ impl From<Offset> for AckRequest {
     }
 }
 
-impl TryFrom<Message> for Vec<u8> {
+impl From<IntOffset> for AckRequest {
+    fn from(offset: IntOffset) -> Self {
+        Self {
+            request: Some(numaflow_pb::clients::source::ack_request::Request {
+                offset: Some(numaflow_pb::clients::source::Offset {
+                    offset: BASE64_STANDARD
+                        .decode(offset.seq.to_string())
+                        .expect("we control the encoding, so this should never fail"),
+                    partition_id: offset.partition_idx,
+                }),
+            }),
+            handshake: None,
+        }
+    }
+}
+
+impl<O: Offset> TryFrom<Message<O>> for Vec<u8> {
     type Error = Error;
 
-    fn try_from(message: Message) -> std::result::Result<Self, Self::Error> {
+    fn try_from(message: Message<O>) -> std::result::Result<Self, Self::Error> {
         let proto_message = numaflow_pb::objects::isb::Message {
             header: Some(numaflow_pb::objects::isb::Header {
                 message_info: Some(numaflow_pb::objects::isb::MessageInfo {
@@ -114,11 +214,7 @@ impl TryFrom<Message> for Vec<u8> {
                     is_late: false, // Set this according to your logic
                 }),
                 kind: numaflow_pb::objects::isb::MessageKind::Data as i32,
-                id: Some(numaflow_pb::objects::isb::MessageId {
-                    vertex_name: get_vertex_name().to_string(),
-                    offset: message.offset.to_string(),
-                    index: 0,
-                }),
+                id: Some(message.id.into()),
                 keys: message.keys.clone(),
                 headers: message.headers.clone(),
             }),
@@ -135,7 +231,7 @@ impl TryFrom<Message> for Vec<u8> {
     }
 }
 
-impl TryFrom<Vec<u8>> for Message {
+impl<O: Offset> TryFrom<Vec<u8>> for Message<O> {
     type Error = Error;
 
     fn try_from(bytes: Vec<u8>) -> std::result::Result<Self, Self::Error> {
@@ -156,24 +252,17 @@ impl TryFrom<Vec<u8>> for Message {
         Ok(Message {
             keys: header.keys,
             value: body.payload,
-            offset: Offset {
-                offset: id.offset.clone(),
-                partition_id: 0, // Set this according to your logic
-            },
+            offset: None,
             event_time: utc_from_timestamp(message_info.event_time),
-            id: MessageID {
-                vertex_name: id.vertex_name,
-                offset: id.offset,
-                index: id.index,
-            },
+            id: id.into(),
             headers: header.headers,
         })
     }
 }
 
 /// Convert the [`Message`] to [`SourceTransformRequest`]
-impl From<Message> for SourceTransformRequest {
-    fn from(message: Message) -> Self {
+impl<O: Offset> From<Message<O>> for SourceTransformRequest {
+    fn from(message: Message<O>) -> Self {
         Self {
             request: Some(
                 numaflow_pb::clients::sourcetransformer::source_transform_request::Request {
@@ -191,14 +280,14 @@ impl From<Message> for SourceTransformRequest {
 }
 
 /// Convert [`read_response::Result`] to [`Message`]
-impl TryFrom<read_response::Result> for Message {
+impl TryFrom<read_response::Result> for Message<StringOffset> {
     type Error = Error;
 
     fn try_from(result: read_response::Result) -> Result<Self> {
         let source_offset = match result.offset {
-            Some(o) => Offset {
-                offset: BASE64_STANDARD.encode(o.offset),
-                partition_id: o.partition_id,
+            Some(o) => StringOffset {
+                seq: BASE64_STANDARD.encode(&o.offset),
+                partition_idx: o.partition_id,
             },
             None => return Err(Error::Source("Offset not found".to_string())),
         };
@@ -206,11 +295,11 @@ impl TryFrom<read_response::Result> for Message {
         Ok(Message {
             keys: result.keys,
             value: result.payload,
-            offset: source_offset.clone(),
+            offset: Some(source_offset.clone()),
             event_time: utc_from_timestamp(result.event_time),
             id: MessageID {
                 vertex_name: get_vertex_name().to_string(),
-                offset: source_offset.offset,
+                offset: source_offset.to_string(),
                 index: 0,
             },
             headers: result.headers,
@@ -219,8 +308,8 @@ impl TryFrom<read_response::Result> for Message {
 }
 
 /// Convert [`Message`] to [`proto::SinkRequest`]
-impl From<Message> for SinkRequest {
-    fn from(message: Message) -> Self {
+impl<O: Offset> From<Message<O>> for SinkRequest {
+    fn from(message: Message<O>) -> Self {
         Self {
             request: Some(Request {
                 keys: message.keys,
@@ -311,9 +400,9 @@ mod tests {
 
     #[test]
     fn test_offset_display() {
-        let offset = Offset {
-            offset: "123".to_string(),
-            partition_id: 1,
+        let offset = StringOffset {
+            seq: "123".to_string(),
+            partition_idx: 1,
         };
         assert_eq!(format!("{}", offset), "123-1");
     }
@@ -330,9 +419,9 @@ mod tests {
 
     #[test]
     fn test_offset_to_ack_request() {
-        let offset = Offset {
-            offset: BASE64_STANDARD.encode("123"),
-            partition_id: 1,
+        let offset = StringOffset {
+            seq: BASE64_STANDARD.encode("123"),
+            partition_idx: 1,
         };
         let ack_request: AckRequest = offset.into();
         assert_eq!(ack_request.request.unwrap().offset.unwrap().partition_id, 1);
@@ -341,12 +430,12 @@ mod tests {
     #[test]
     fn test_message_to_vec_u8() {
         let message = Message {
-            keys: vec!["key1".to_string()],
+            keys: vec!["key2".to_string()],
             value: vec![1, 2, 3],
-            offset: Offset {
-                offset: "123".to_string(),
-                partition_id: 0,
-            },
+            offset: Some(StringOffset {
+                seq: "123".to_string(),
+                partition_idx: 0,
+            }),
             event_time: Utc.timestamp_opt(1627846261, 0).unwrap(),
             id: MessageID {
                 vertex_name: "vertex".to_string(),
@@ -367,9 +456,9 @@ mod tests {
                 }),
                 kind: numaflow_pb::objects::isb::MessageKind::Data as i32,
                 id: Some(MessageId {
-                    vertex_name: get_vertex_name().to_string(),
-                    offset: message.offset.to_string(),
-                    index: 0,
+                    vertex_name: message.id.vertex_name,
+                    offset: message.id.offset,
+                    index: message.id.index,
                 }),
                 keys: message.keys.clone(),
                 headers: message.headers.clone(),
@@ -409,13 +498,12 @@ mod tests {
         let mut buf = Vec::new();
         prost::Message::encode(&proto_message, &mut buf).unwrap();
 
-        let result: Result<Message> = buf.try_into();
+        let result: Result<Message<StringOffset>> = buf.try_into();
         assert!(result.is_ok());
 
         let message = result.unwrap();
         assert_eq!(message.keys, vec!["key1".to_string()]);
         assert_eq!(message.value, vec![1, 2, 3]);
-        assert_eq!(message.offset.offset, "123");
         assert_eq!(
             message.event_time,
             Utc.timestamp_opt(1627846261, 0).unwrap()
@@ -425,12 +513,12 @@ mod tests {
     #[test]
     fn test_message_to_source_transform_request() {
         let message = Message {
-            keys: vec!["key1".to_string()],
+            keys: vec!["key3".to_string()],
             value: vec![1, 2, 3],
-            offset: Offset {
-                offset: "123".to_string(),
-                partition_id: 0,
-            },
+            offset: Some(StringOffset {
+                seq: "123".to_string(),
+                partition_idx: 0,
+            }),
             event_time: Utc.timestamp_opt(1627846261, 0).unwrap(),
             id: MessageID {
                 vertex_name: "vertex".to_string(),
@@ -459,7 +547,7 @@ mod tests {
             headers: HashMap::new(),
         };
 
-        let message: Result<Message> = result.try_into();
+        let message: Result<Message<StringOffset>> = result.try_into();
         assert!(message.is_ok());
 
         let message = message.unwrap();
@@ -476,10 +564,10 @@ mod tests {
         let message = Message {
             keys: vec!["key1".to_string()],
             value: vec![1, 2, 3],
-            offset: Offset {
-                offset: "123".to_string(),
-                partition_id: 0,
-            },
+            offset: Some(StringOffset {
+                seq: "123".to_string(),
+                partition_idx: 0,
+            }),
             event_time: Utc.timestamp_opt(1627846261, 0).unwrap(),
             id: MessageID {
                 vertex_name: "vertex".to_string(),

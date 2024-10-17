@@ -9,7 +9,7 @@ use tonic::transport::Channel;
 use tonic::{Request, Streaming};
 
 use crate::config::config;
-use crate::message::{Message, Offset};
+use crate::message::{Message, Offset, StringOffset};
 use crate::reader::LagReader;
 use crate::source::{SourceAcker, SourceReader};
 use crate::{Error, Result};
@@ -103,7 +103,7 @@ impl SourceReader for UserDefinedSourceRead {
         "user-defined-source"
     }
 
-    async fn read(&mut self) -> Result<Vec<Message>> {
+    async fn read(&mut self) -> Result<Vec<Message<StringOffset>>> {
         let request = ReadRequest {
             request: Some(read_request::Request {
                 num_records: self.num_records as u64,
@@ -117,7 +117,7 @@ impl SourceReader for UserDefinedSourceRead {
             .await
             .map_err(|e| Error::Source(e.to_string()))?;
 
-        let mut messages = Vec::with_capacity(self.num_records);
+        let mut messages: Vec<Message<StringOffset>> = Vec::with_capacity(self.num_records);
 
         while let Some(response) = self.resp_stream.message().await? {
             if response.status.map_or(false, |status| status.eot) {

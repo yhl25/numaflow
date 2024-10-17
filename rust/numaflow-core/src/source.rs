@@ -1,6 +1,7 @@
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::config;
+use crate::message::StringOffset;
 use crate::{
     message::{Message, Offset},
     monovertex::SourceType,
@@ -23,7 +24,7 @@ pub(crate) trait SourceReader {
     /// Name of the source.
     fn name(&self) -> &'static str;
 
-    async fn read(&mut self) -> crate::Result<Vec<Message>>;
+    async fn read(&mut self) -> crate::Result<Vec<Message<StringOffset>>>;
 
     #[allow(dead_code)]
     /// number of partitions processed by this source.
@@ -31,42 +32,46 @@ pub(crate) trait SourceReader {
 }
 
 /// Set of Ack related items that has to be implemented to become a Source.
-pub(crate) trait SourceAcker {
+pub(crate) trait SourceAcker<O: Offset> {
     /// acknowledge an offset. The implementor might choose to do it in an asynchronous way.
-    async fn ack(&mut self, _: Vec<Offset>) -> crate::Result<()>;
+    async fn ack(&mut self, _: Vec<O>) -> crate::Result<()>;
 }
 
-enum ActorMessage {
+enum ActorMessage<O: Offset> {
     #[allow(dead_code)]
     Name {
         respond_to: oneshot::Sender<&'static str>,
     },
     Read {
-        respond_to: oneshot::Sender<crate::Result<Vec<Message>>>,
+        respond_to: oneshot::Sender<crate::Result<Vec<Message<O>>>>,
     },
     Ack {
         respond_to: oneshot::Sender<crate::Result<()>>,
-        offsets: Vec<Offset>,
+        offsets: Vec<O>,
     },
     Pending {
         respond_to: oneshot::Sender<crate::Result<Option<usize>>>,
     },
 }
 
-struct SourceActor<R, A, L> {
-    receiver: mpsc::Receiver<ActorMessage>,
+struct SourceActor<R, A, L, O>
+where
+    O: Offset,
+{
+    receiver: mpsc::Receiver<ActorMessage<O>>,
     reader: R,
     acker: A,
     lag_reader: L,
 }
 
-impl<R, A, L> SourceActor<R, A, L>
+impl<R, A, L, O> SourceActor<R, A, L, O>
 where
-    R: SourceReader,
-    A: SourceAcker,
+    R: SourceReader<O>,
+    A: SourceAcker<O>,
     L: LagReader,
+    O: Offset,
 {
-    fn new(receiver: mpsc::Receiver<ActorMessage>, reader: R, acker: A, lag_reader: L) -> Self {
+    fn new(receiver: mpsc::Receiver<ActorMessage<O>>, reader: R, acker: A, lag_reader: L) -> Self {
         Self {
             receiver,
             reader,
@@ -75,7 +80,7 @@ where
         }
     }
 
-    async fn handle_message(&mut self, msg: ActorMessage) {
+    async fn handle_message(&mut self, msg: ActorMessage<O>) {
         match msg {
             ActorMessage::Name { respond_to } => {
                 let name = self.reader.name();
@@ -101,12 +106,18 @@ where
 }
 
 #[derive(Clone)]
-pub(crate) struct SourceHandle {
-    sender: mpsc::Sender<ActorMessage>,
+pub(crate) struct SourceHandle<O: Offset> {
+    sender: mpsc::Sender<ActorMessage<O>>,
 }
 
-impl SourceHandle {
-    pub(crate) fn new(src_type: SourceType) -> Self {
+impl<O: Offset> SourceHandle<O> {
+    pub(crate) fn new<R, A, L>(src_type: SourceType) -> Self
+    where
+        R: SourceReader<O> + Send + 'static,
+        A: SourceAcker<O> + Send + 'static,
+        L: LagReader + Send + 'static,
+        O: Offset + Send + 'static,
+    {
         let (sender, receiver) = mpsc::channel(config().batch_size as usize);
         match src_type {
             SourceType::UserDefinedSource(reader, acker, lag_reader) => {
@@ -129,7 +140,7 @@ impl SourceHandle {
         Self { sender }
     }
 
-    pub(crate) async fn read(&self) -> crate::Result<Vec<Message>> {
+    pub(crate) async fn read(&self) -> crate::Result<Vec<Message<O>>> {
         let (sender, receiver) = oneshot::channel();
         let msg = ActorMessage::Read { respond_to: sender };
         // Ignore send errors. If send fails, so does the recv.await below. There's no reason
@@ -140,7 +151,7 @@ impl SourceHandle {
             .map_err(|e| crate::error::Error::ActorPatternRecv(e.to_string()))?
     }
 
-    pub(crate) async fn ack(&self, offsets: Vec<Offset>) -> crate::Result<()> {
+    pub(crate) async fn ack(&self, offsets: Vec<O>) -> crate::Result<()> {
         let (sender, receiver) = oneshot::channel();
         let msg = ActorMessage::Ack {
             respond_to: sender,
